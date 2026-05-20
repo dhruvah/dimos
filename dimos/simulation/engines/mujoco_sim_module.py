@@ -77,6 +77,13 @@ class MujocoSimModuleConfig(ModuleConfig, DepthCameraConfig):
     address: str = ""
     headless: bool = False
     dof: int = 7
+    # Names of the joints (in actuator order) that this module exposes through
+    # SHM. When set, the last name is treated as the gripper joint and `dof`
+    # is derived as `len(controlled_joints) - 1`. Engine still simulates the
+    # full MJCF; non-listed joints hold whatever target they were initialized
+    # to. When None, falls back to "first `dof` joints by actuator order + one
+    # gripper joint" — the legacy behavior.
+    controlled_joints: list[str] | None = None
 
     # Camera config (matches former MujocoCameraConfig).
     camera_name: str = "wrist_camera"
@@ -122,6 +129,11 @@ class MujocoSimModule(
         self._stop_event = threading.Event()
         self._publish_thread: threading.Thread | None = None
         self._camera_info_base: CameraInfo | None = None
+        # Engine joint indices this module exposes through SHM, in controlled
+        # order. Includes the gripper as the last entry when present.
+        self._controlled_indices: list[int] = []
+        # Controlled-arm dof (excludes gripper).
+        self._dof: int = 0
 
     @property
     def _camera_link(self) -> str:
@@ -184,20 +196,48 @@ class MujocoSimModule(
             on_after_step=self._publish_shm_state,
         )
 
-        # Detect gripper (extra joint beyond dof).
-        dof = self.config.dof
+        # Resolve which engine joint indices this module exposes through SHM.
         joint_names = list(self._engine.joint_names)
-        if len(joint_names) > dof:
-            ctrl_range = self._engine.get_actuator_ctrl_range(dof)
-            joint_range = self._engine.get_joint_range(dof)
+        if self.config.controlled_joints is not None:
+            missing = [n for n in self.config.controlled_joints if n not in joint_names]
+            if missing:
+                raise ValueError(
+                    f"MujocoSimModule: controlled_joints not found in MJCF: {missing}. "
+                    f"Available joints: {joint_names}"
+                )
+            self._controlled_indices = [
+                joint_names.index(n) for n in self.config.controlled_joints
+            ]
+            # Last controlled joint is the gripper; arm dof is everything before it.
+            self._dof = len(self._controlled_indices) - 1
+            gripper_engine_idx: int | None = (
+                self._controlled_indices[-1] if self._controlled_indices else None
+            )
+        else:
+            self._dof = self.config.dof
+            if len(joint_names) > self._dof:
+                self._controlled_indices = list(range(self._dof + 1))
+                gripper_engine_idx = self._dof
+            else:
+                self._controlled_indices = list(range(self._dof))
+                gripper_engine_idx = None
+
+        # Detect gripper (last controlled joint, if any).
+        if gripper_engine_idx is not None:
+            ctrl_range = self._engine.get_actuator_ctrl_range(gripper_engine_idx)
+            joint_range = self._engine.get_joint_range(gripper_engine_idx)
             if ctrl_range is None or joint_range is None:
-                raise ValueError(f"Gripper joint at index {dof} missing ctrl/joint range in MJCF")
-            self._gripper_idx = dof
+                raise ValueError(
+                    f"Gripper joint '{joint_names[gripper_engine_idx]}' "
+                    f"(engine idx {gripper_engine_idx}) missing ctrl/joint range in MJCF"
+                )
+            self._gripper_idx = gripper_engine_idx
             self._gripper_ctrl_range = ctrl_range
             self._gripper_joint_range = joint_range
             logger.info(
                 "MujocoSimModule: gripper detected",
-                idx=dof,
+                name=joint_names[gripper_engine_idx],
+                engine_idx=gripper_engine_idx,
                 ctrl_range=ctrl_range,
                 joint_range=joint_range,
             )
@@ -206,7 +246,8 @@ class MujocoSimModule(
         if not self._engine.connect():
             raise RuntimeError("MujocoSimModule: engine.connect() failed")
 
-        self._shm.signal_ready(num_joints=len(joint_names))
+        # SHM exposes the controlled subset to the adapter.
+        self._shm.signal_ready(num_joints=len(self._controlled_indices))
 
         # Camera intrinsics.
         self._build_camera_info()
@@ -239,7 +280,8 @@ class MujocoSimModule(
         logger.info(
             "MujocoSimModule started",
             address=self.config.address,
-            dof=dof,
+            dof=self._dof,
+            controlled_joints=[joint_names[i] for i in self._controlled_indices],
             camera=self.config.camera_name,
             shm_key=shm_key,
         )
@@ -280,15 +322,16 @@ class MujocoSimModule(
         shm = self._shm
         if shm is None:
             return
-        dof = self.config.dof
 
-        pos_cmd = shm.read_position_command(dof)
+        arm_indices = self._controlled_indices[: self._dof]
+
+        pos_cmd = shm.read_position_command(self._dof)
         if pos_cmd is not None:
-            engine.write_joint_command(JointState(position=pos_cmd.tolist()))
+            engine.set_position_targets_at(arm_indices, pos_cmd.tolist())
 
-        vel_cmd = shm.read_velocity_command(dof)
+        vel_cmd = shm.read_velocity_command(self._dof)
         if vel_cmd is not None:
-            engine.write_joint_command(JointState(velocity=vel_cmd.tolist()))
+            engine.set_velocity_targets_at(arm_indices, vel_cmd.tolist())
 
         if self._gripper_idx is not None:
             gripper_cmd = shm.read_gripper_command()
@@ -297,19 +340,20 @@ class MujocoSimModule(
                 engine.set_position_target(self._gripper_idx, ctrl_value)
 
     def _publish_shm_state(self, engine: MujocoEngine) -> None:
-        """Post-step hook: publish joint state to SHM."""
+        """Post-step hook: publish joint state to SHM (controlled subset)."""
         shm = self._shm
         if shm is None:
             return
+        all_positions = engine.joint_positions
+        all_velocities = engine.joint_velocities
+        all_efforts = engine.joint_efforts
         shm.write_joint_state(
-            positions=engine.joint_positions,
-            velocities=engine.joint_velocities,
-            efforts=engine.joint_efforts,
+            positions=[all_positions[i] for i in self._controlled_indices],
+            velocities=[all_velocities[i] for i in self._controlled_indices],
+            efforts=[all_efforts[i] for i in self._controlled_indices],
         )
-        if self._gripper_idx is not None:
-            positions = engine.joint_positions
-            if self._gripper_idx < len(positions):
-                shm.write_gripper_state(positions[self._gripper_idx])
+        if self._gripper_idx is not None and self._gripper_idx < len(all_positions):
+            shm.write_gripper_state(all_positions[self._gripper_idx])
 
     def _gripper_joint_to_ctrl(self, joint_position: float) -> float:
         """Map joint-space gripper position to actuator control value."""

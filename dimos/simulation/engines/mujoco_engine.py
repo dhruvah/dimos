@@ -407,6 +407,50 @@ class MujocoEngine(SimulationEngine):
         with self._lock:
             self._joint_position_targets[index] = float(value)
 
+    def set_position_targets_at(
+        self,
+        indices: list[int],
+        values: list[float],
+    ) -> None:
+        """Switch to position mode and write targets at the given engine indices.
+
+        Indices that are not listed retain their current target — this is what
+        lets one module control a subset of a multi-arm model without
+        zero-commanding the rest.
+        """
+        if len(indices) != len(values):
+            raise ValueError(
+                f"indices/values length mismatch: {len(indices)} vs {len(values)}"
+            )
+        with self._lock:
+            self._command_mode = "position"
+            for idx, val in zip(indices, values):
+                if idx < 0 or idx >= self._num_joints:
+                    raise IndexError(
+                        f"Engine joint index {idx} out of range [0, {self._num_joints})"
+                    )
+                self._joint_position_targets[idx] = float(val)
+
+    def set_velocity_targets_at(
+        self,
+        indices: list[int],
+        values: list[float],
+    ) -> None:
+        """Switch to velocity mode and write targets at the given engine indices."""
+        if len(indices) != len(values):
+            raise ValueError(
+                f"indices/values length mismatch: {len(indices)} vs {len(values)}"
+            )
+        with self._lock:
+            self._command_mode = "velocity"
+            for idx, val in zip(indices, values):
+                if idx < 0 or idx >= self._num_joints:
+                    raise IndexError(
+                        f"Engine joint index {idx} out of range [0, {self._num_joints})"
+                    )
+                self._joint_velocity_targets[idx] = float(val)
+
+
     def get_position_target(self, index: int) -> float:
         with self._lock:
             return float(self._joint_position_targets[index])

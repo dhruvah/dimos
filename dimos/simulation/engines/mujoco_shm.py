@@ -150,7 +150,13 @@ class ManipShmSet:
         buffers: dict[str, SharedMemory] = {}
         for buffer_name in _shm_sizes:
             name = _buffer_name(key, buffer_name)
-            buffers[buffer_name] = _unregister(SharedMemory(name=name))
+            # Do NOT call _unregister() here. All forkserver workers share a
+            # single resource_tracker daemon (Daemon_F). The creator (Worker 0)
+            # will call shm.unlink() in cleanup(), which internally calls
+            # unregister() — that call must find the name in Daemon_F's cache.
+            # Calling _unregister() here would remove it prematurely, causing
+            # KeyError spam when Worker 0 later unlinks.
+            buffers[buffer_name] = SharedMemory(name=name)
         return cls(**buffers)
 
     def as_list(self) -> list[SharedMemory]:

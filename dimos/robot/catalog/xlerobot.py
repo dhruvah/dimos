@@ -49,3 +49,41 @@ def xlerobot_right_arm(
     }
     defaults.update(overrides)
     return RobotConfig(**defaults)
+
+
+def xlerobot_left_arm(
+    name: str = "xlerobot",
+    *,
+    adapter_type: str = "mock",
+    address: str | None = None,
+    **overrides: Any,
+) -> RobotConfig:
+    """XLeRobot left arm (SO-ARM101, 5-DOF + gripper) on wheeled mobile base.
+
+    Mirror of xlerobot_right_arm — same MJCF, same scene, different arm. The
+    sim module's controlled_joints decides which arm a given module instance
+    drives.
+    """
+    addr = address or str(XLEROBOT_SIM_PATH)
+    defaults: dict[str, Any] = {
+        "name": name,
+        "model_path": XLEROBOT_SIM_PATH,
+        "end_effector_link": "Fixed_Jaw_1",
+        "adapter_type": adapter_type,
+        "address": addr,
+        "joint_names": _LEFT_ARM_JOINTS,
+        "base_link": "chassis",
+        "home_joints": [0.0, 0.5, 0.5, 0.0, 0.0],
+        "base_pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0],
+        "package_paths": {},
+        "xacro_args": {},
+        "auto_convert_meshes": False,
+        "gripper": GripperConfig(
+            type="xlerobot",
+            joints=["Jaw_L"],
+            open_position=1.7453,
+            close_position=-0.3745,
+        ),
+    }
+    defaults.update(overrides)
+    return RobotConfig(**defaults)
