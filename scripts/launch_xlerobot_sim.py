@@ -21,7 +21,18 @@ def main() -> None:
     model = mujoco.MjModel.from_xml_path(str(SCENE))
     data = mujoco.MjData(model)
     print(f"OK — {model.njnt} joints, {model.nu} actuators, {model.ncam} cameras")
-    print("Cameras:", [model.camera(i).name for i in range(model.ncam)])
+    print("Actuators:", [model.actuator(i).name for i in range(model.nu)])
+    print("Cameras:  ", [model.camera(i).name for i in range(model.ncam)])
+    print()
+    print("Tip: expand 'Control' in the right panel to drag joint sliders.")
+    print("     Double-click any body to track it with the camera.")
+
+    # Set a neutral home pose for both arms (slightly raised)
+    arm_joints = ["Pitch_R", "Elbow_R", "Pitch_L", "Elbow_L"]
+    for name in arm_joints:
+        act_id = mujoco.mj_name2id(model, mujoco.mjtObj.mjOBJ_ACTUATOR, name)
+        if act_id >= 0:
+            data.ctrl[act_id] = 0.8  # Slightly raised elbow/pitch
 
     with mujoco.viewer.launch_passive(model, data) as viewer:
         print("Viewer open. Close window to exit.")
