@@ -18,10 +18,12 @@
 """Pygame Joystick Module for testing B1 control via LCM."""
 
 import os
+import sys
 import threading
 
-# Force X11 driver to avoid OpenGL threading issues
-os.environ["SDL_VIDEODRIVER"] = "x11"
+# Force X11 driver on Linux to avoid OpenGL threading issues (not needed on macOS)
+if sys.platform != "darwin":
+    os.environ["SDL_VIDEODRIVER"] = "x11"
 
 import time
 

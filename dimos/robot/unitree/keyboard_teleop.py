@@ -14,6 +14,7 @@
 # limitations under the License.
 
 import os
+import sys
 import threading
 from typing import Any
 
@@ -26,8 +27,9 @@ from dimos.core.stream import Out
 from dimos.msgs.geometry_msgs.Twist import Twist
 from dimos.msgs.geometry_msgs.Vector3 import Vector3
 
-# Force X11 driver to avoid OpenGL threading issues
-os.environ["SDL_VIDEODRIVER"] = "x11"
+# Force X11 driver on Linux to avoid OpenGL threading issues (not needed on macOS)
+if sys.platform != "darwin":
+    os.environ["SDL_VIDEODRIVER"] = "x11"
 
 DEFAULT_LINEAR_SPEED: float = 0.5  # m/s
 DEFAULT_ANGULAR_SPEED: float = 0.8  # rad/s
